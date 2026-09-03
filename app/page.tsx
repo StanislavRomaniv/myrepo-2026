@@ -1,112 +1,95 @@
 'use client';
 
-import { useState } from 'react';
+import Image from 'next/image';
+import { useEffect, useRef, useState } from 'react';
 
-type SearchItem = {
+type Product = {
   id: number;
-  searchTerm: string;
+  title: string;
+  price: number;
+  thumbnail: string;
 };
 
-type SearchState = { status: 'idle'; data: SearchItem[] } | { status: 'loading' } | { status: 'empty' } | { status: 'success'; data: SearchItem[] } | { status: 'error'; message: string };
+type SearchState = { status: 'idle'; data: Product[] } | { status: 'loading' } | { status: 'empty' } | { status: 'success'; data: Product[] } | { status: 'error'; message: string };
 
-const MockData: SearchItem[] = [
-  {
-    id: 1,
-    searchTerm: 'apple',
-  },
-  {
-    id: 2,
-    searchTerm: 'banana',
-  },
-  {
-    id: 3,
-    searchTerm: 'cherry',
-  },
-  {
-    id: 4,
-    searchTerm: 'date',
-  },
-  {
-    id: 5,
-    searchTerm: 'elderberry',
-  },
-  {
-    id: 6,
-    searchTerm: 'fig',
-  },
-  {
-    id: 7,
-    searchTerm: 'grape',
-  },
-  {
-    id: 8,
-    searchTerm: 'honeydew',
-  },
-  {
-    id: 9,
-    searchTerm: 'kiwi',
-  },
-  {
-    id: 10,
-    searchTerm: 'lemon',
-  },
-  {
-    id: 11,
-    searchTerm: 'mango',
-  },
-  {
-    id: 12,
-    searchTerm: 'nectarine',
-  },
-  {
-    id: 13,
-    searchTerm: 'orange',
-  },
-  {
-    id: 14,
-    searchTerm: 'pear',
-  },
-];
+type ProductsResponse = {
+  products: Product[];
+  total: number;
+  skip: number;
+  limit: number;
+};
 
-const filterMockData = (searchTerm: string): Promise<SearchItem[]> => {
-  const normalizedQuery = searchTerm.trim().toLowerCase();
+const fetchProducts = async (query = '', signal?: AbortSignal): Promise<Product[]> => {
+  const normalizedQuery = encodeURIComponent(query.trim());
 
-  return new Promise<SearchItem[]>((resolve, reject) => {
-    setTimeout(() => {
-      if (normalizedQuery === 'error') {
-        reject(new Error('Mock request failed'));
-        return;
-      }
+  const response = await fetch(`https://dummyjson.com/products/search?q=${normalizedQuery}`, { signal });
 
-      const filteredData = MockData.filter((item) => item.searchTerm.toLowerCase().includes(normalizedQuery));
+  if (!response.ok) {
+    throw new Error(`Request failed with status ${response.status}`);
+  }
 
-      resolve(filteredData);
-    }, 1000);
-  });
+  const result = (await response.json()) as ProductsResponse;
+
+  return result.products.map((item: Product) => ({ id: item.id, price: item.price, title: item.title, thumbnail: item.thumbnail }));
 };
 
 export default function Home() {
+  const controllerRef = useRef<AbortController | null>(null);
   const [draft, setDraft] = useState<string>('');
   const [lastSubmittedQuery, setLastSubmittedQuery] = useState<string>('');
-  const [searchState, setSearchState] = useState<SearchState>({ status: 'idle', data: MockData });
+  const [searchState, setSearchState] = useState<SearchState>({ status: 'idle', data: [] });
+
+  useEffect(() => {
+    const controller = new AbortController();
+    controllerRef.current = controller;
+
+    fetchProducts('', controller.signal)
+      .then((products) => {
+        if (products.length === 0) {
+          setSearchState({ status: 'empty' });
+        } else {
+          setSearchState({ status: 'success', data: products });
+        }
+      })
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          return;
+        }
+
+        setSearchState({ status: 'error', message: err instanceof Error ? err.message : 'Unknown error' });
+      });
+  }, []);
 
   async function search(query: string): Promise<void> {
+    // Cancel the previous request
+    controllerRef.current?.abort();
+
+    // Create a controller for the new request
+    const controller = new AbortController();
+    controllerRef.current = controller;
+
     setSearchState({ status: 'loading' });
     setLastSubmittedQuery(query);
 
     try {
-      const res = await filterMockData(query);
+      const res = await fetchProducts(query, controllerRef.current.signal);
+      console.log(res);
 
       if (res.length === 0) {
         setSearchState({ status: 'empty' });
-      } else {
-        setSearchState({
-          status: 'success',
-          data: res,
-        });
+        return;
       }
+
+      setSearchState({
+        status: 'success',
+        data: res,
+      });
     } catch (err) {
-      console.error(err);
+      // Cancellation is expected, not an application error
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        return;
+      }
+
       setSearchState({ status: 'error', message: err instanceof Error ? err.message : 'Unknown error' });
     }
   }
@@ -120,9 +103,7 @@ export default function Home() {
         }}
       >
         <input value={draft} onChange={(e) => setDraft(e.target.value)} />
-        <button type="submit" disabled={searchState.status === 'loading'}>
-          {searchState.status === 'loading' ? 'Searching…' : 'Search'}
-        </button>
+        <button type="submit">{searchState.status === 'loading' ? 'Searching…' : 'Search'}</button>
       </form>
 
       <div>
@@ -136,7 +117,15 @@ export default function Home() {
         ) : searchState.status === 'success' || searchState.status === 'idle' ? (
           <ul>
             {searchState.data.map((item) => (
-              <li key={item.id}>{item.searchTerm}</li>
+              <li key={item.id}>
+                <div className="flex">
+                  <Image src={item.thumbnail} width={100} height={100} alt={item.title} />
+                  <div className="flex flex-col">
+                    <p>{item.title}</p>
+                    <p>{item.price}</p>
+                  </div>
+                </div>
+              </li>
             ))}
           </ul>
         ) : (
@@ -146,7 +135,7 @@ export default function Home() {
               onClick={() => {
                 setLastSubmittedQuery('');
                 setDraft('');
-                setSearchState({ status: 'idle', data: MockData });
+                search('');
               }}
             >
               Clear
